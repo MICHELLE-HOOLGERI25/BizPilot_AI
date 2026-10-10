@@ -9,6 +9,12 @@ from app.db.session import SessionLocal
 from app.main import app
 
 
+TEST_HEADERS = {
+    "X-Demo-Actor-Id": "pytest-products-user",
+    "X-Demo-Tenant-Id": "demo",
+    "X-Demo-Role": "admin",
+}
+
 TEST_SKU = "TEST-API-9001"
 
 PRODUCT_PAYLOAD = {
@@ -37,7 +43,7 @@ def client():
 
     app.dependency_overrides[get_db] = override_get_db
 
-    with TestClient(app) as test_client:
+    with TestClient(app, headers=TEST_HEADERS) as test_client:
         yield test_client
 
     app.dependency_overrides.clear()
