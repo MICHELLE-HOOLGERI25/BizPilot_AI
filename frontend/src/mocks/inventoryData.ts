@@ -19,6 +19,7 @@ export type InventoryRecord = {
   reserved: number;
   reorderPoint: number;
   updatedAt: string;
+  version: number;
 };
 
 export const demoInventory: InventoryRecord[] = [
@@ -32,6 +33,7 @@ export const demoInventory: InventoryRecord[] = [
     reserved: 2,
     reorderPoint: 10,
     updatedAt: "2026-10-09",
+    version: 1,
   },
   {
     id: "i02",
@@ -43,6 +45,7 @@ export const demoInventory: InventoryRecord[] = [
     reserved: 3,
     reorderPoint: 15,
     updatedAt: "2026-10-09",
+    version: 1,
   },
   {
     id: "i03",
@@ -54,6 +57,7 @@ export const demoInventory: InventoryRecord[] = [
     reserved: 2,
     reorderPoint: 8,
     updatedAt: "2026-10-08",
+    version: 1,
   },
   {
     id: "i04",
@@ -65,6 +69,7 @@ export const demoInventory: InventoryRecord[] = [
     reserved: 4,
     reorderPoint: 12,
     updatedAt: "2026-10-09",
+    version: 1,
   },
   {
     id: "i05",
@@ -76,6 +81,7 @@ export const demoInventory: InventoryRecord[] = [
     reserved: 1,
     reorderPoint: 9,
     updatedAt: "2026-10-07",
+    version: 1,
   },
   {
     id: "i06",
@@ -87,6 +93,7 @@ export const demoInventory: InventoryRecord[] = [
     reserved: 3,
     reorderPoint: 7,
     updatedAt: "2026-10-09",
+    version: 1,
   },
   {
     id: "i07",
@@ -98,6 +105,7 @@ export const demoInventory: InventoryRecord[] = [
     reserved: 3,
     reorderPoint: 10,
     updatedAt: "2026-10-08",
+    version: 1,
   },
   {
     id: "i08",
@@ -109,6 +117,7 @@ export const demoInventory: InventoryRecord[] = [
     reserved: 4,
     reorderPoint: 12,
     updatedAt: "2026-10-06",
+    version: 1,
   },
 ];
 

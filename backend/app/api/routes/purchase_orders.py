@@ -721,3 +721,185 @@ def get_purchase_order(
         order_id,
         actor.tenant_id,
     )
+
+@router.patch("/{order_id}", response_model=PurchaseOrderResponse)
+def update_draft_purchase_order(
+    order_id: int,
+    payload: PurchaseOrderCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(require_permission(CREATE_OPERATION)),
+):
+    request_id = request_id_for(request)
+
+    try:
+        order = db.scalar(
+            select(PurchaseOrder)
+            .where(
+                PurchaseOrder.id == order_id,
+                PurchaseOrder.tenant_id == actor.tenant_id,
+            )
+            .with_for_update()
+        )
+
+        if order is None:
+            raise HTTPException(404, "Purchase order not found")
+
+        if order.status != "draft":
+            raise HTTPException(
+                409, "Only draft purchase orders can be edited"
+            )
+
+        supplier, store, prepared_items = validate_and_prepare_items(
+            db, payload, actor.tenant_id
+        )
+
+        order.supplier_id = supplier.id
+        order.store_id = store.id
+        order.items.clear()
+
+        for prepared in prepared_items:
+            order.items.append(
+                PurchaseOrderItem(
+                    tenant_id=actor.tenant_id,
+                    product_id=prepared["product"].id,
+                    quantity=prepared["quantity"],
+                    unit_cost=prepared["unit_cost"],
+                )
+            )
+
+        db.flush()
+
+        result = load_purchase_order(db, order.id, actor.tenant_id)
+
+        write_audit(
+            db,
+            actor=actor,
+            request_id=request_id,
+            action="purchase_order.update",
+            outcome="success",
+            entity_id=str(order.id),
+            details={"order_number": order.order_number},
+        )
+
+        db.commit()
+        return result
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/{order_id}/cancel", response_model=PurchaseOrderResponse)
+def cancel_draft_purchase_order(
+    order_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(require_permission(CREATE_OPERATION)),
+):
+    request_id = request_id_for(request)
+
+    try:
+        order = db.scalar(
+            select(PurchaseOrder)
+            .where(
+                PurchaseOrder.id == order_id,
+                PurchaseOrder.tenant_id == actor.tenant_id,
+            )
+            .with_for_update()
+        )
+
+        if order is None:
+            raise HTTPException(404, "Purchase order not found")
+
+        if order.status != "draft":
+            raise HTTPException(
+                409, "Only draft purchase orders can be cancelled"
+            )
+
+        order.status = "cancelled"
+        db.flush()
+
+        result = load_purchase_order(db, order.id, actor.tenant_id)
+
+        write_audit(
+            db,
+            actor=actor,
+            request_id=request_id,
+            action="purchase_order.cancel",
+            outcome="success",
+            entity_id=str(order.id),
+            details={"order_number": order.order_number},
+        )
+
+        db.commit()
+        return result
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+@router.post("/{order_id}/submit", response_model=PurchaseOrderResponse)
+def submit_purchase_order(
+    order_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    actor: Actor = Depends(require_permission(CREATE_OPERATION)),
+):
+    request_id = request_id_for(request)
+
+    try:
+        order = db.scalar(
+            select(PurchaseOrder)
+            .where(
+                PurchaseOrder.id == order_id,
+                PurchaseOrder.tenant_id == actor.tenant_id,
+            )
+            .with_for_update()
+        )
+
+        if order is None:
+            raise HTTPException(status_code=404, detail="Purchase order not found")
+
+        if order.status != "draft":
+            raise HTTPException(
+                status_code=409,
+                detail="Only draft purchase orders can be submitted",
+            )
+
+        if not order.items:
+            raise HTTPException(
+                status_code=422,
+                detail="Cannot submit an empty purchase order",
+            )
+
+        order.status = "submitted"
+        db.flush()
+
+        result = load_purchase_order(db, order.id, actor.tenant_id)
+
+        write_audit(
+            db,
+            actor=actor,
+            request_id=request_id,
+            action="purchase_order.submit",
+            outcome="success",
+            entity_id=str(order.id),
+            details={"order_number": order.order_number},
+        )
+
+        db.commit()
+        return result
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise

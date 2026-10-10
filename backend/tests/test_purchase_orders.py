@@ -5,6 +5,7 @@ from sqlalchemy import delete, select
 from app.api.routes.purchase_orders import get_db
 from app.db.models import (
     ActionConfirmation,
+    AuditLog,
     IdempotencyRecord,
     PurchaseOrder,
     PurchaseOrderItem,
@@ -368,3 +369,83 @@ def test_purchase_orders_are_scoped_to_tenant(client):
 
     listed_orders = list_response.json()["data"]
     assert all(order["id"] != order_id for order in listed_orders)
+
+
+def test_edit_draft_purchase_order_and_audit(client):
+    created = create_confirmed_purchase_order(
+        client, VALID_PAYLOAD, "pytest-edit-po-0001"
+    )
+    assert created.status_code == 201, created.text
+    order_id = created.json()["id"]
+
+    updated_payload = {
+        "supplier_id": 1,
+        "store_code": "VIE",
+        "items": [{"sku": "VEL-201", "quantity": 3}],
+    }
+
+    response = client.patch(
+        f"/api/v1/purchase-orders/{order_id}",
+        json=updated_payload,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "draft"
+    assert response.json()["items"][0]["quantity"] == 3
+
+    with SessionLocal() as db:
+        audit = db.scalar(
+            select(AuditLog).where(
+                AuditLog.action == "purchase_order.update",
+                AuditLog.entity_id == str(order_id),
+                AuditLog.outcome == "success",
+            )
+        )
+        assert audit is not None
+
+
+def test_cancel_draft_purchase_order_and_audit(client):
+    created = create_confirmed_purchase_order(
+        client, VALID_PAYLOAD, "pytest-cancel-po-0001"
+    )
+    assert created.status_code == 201, created.text
+    order_id = created.json()["id"]
+
+    response = client.post(
+        f"/api/v1/purchase-orders/{order_id}/cancel"
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "cancelled"
+
+    with SessionLocal() as db:
+        audit = db.scalar(
+            select(AuditLog).where(
+                AuditLog.action == "purchase_order.cancel",
+                AuditLog.entity_id == str(order_id),
+                AuditLog.outcome == "success",
+            )
+        )
+        assert audit is not None
+
+
+def test_submit_draft_purchase_order_and_audit(client):
+    created = create_confirmed_purchase_order(
+        client, VALID_PAYLOAD, "pytest-submit-po-0001"
+    )
+    assert created.status_code == 201, created.text
+    order_id = created.json()["id"]
+
+    response = client.post(
+        f"/api/v1/purchase-orders/{order_id}/submit"
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "submitted"
+
+    with SessionLocal() as db:
+        audit = db.scalar(
+            select(AuditLog).where(
+                AuditLog.action == "purchase_order.submit",
+                AuditLog.entity_id == str(order_id),
+                AuditLog.outcome == "success",
+            )
+        )
+        assert audit is not None

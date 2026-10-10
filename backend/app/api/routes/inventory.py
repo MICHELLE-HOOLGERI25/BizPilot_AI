@@ -1,14 +1,20 @@
 from datetime import datetime, timedelta, timezone
 from math import ceil
+import json
+import re
+from uuid import uuid4
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, select
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.security import Actor, require_permission
 from app.db.models import (
     Inventory,
+    AuditLog,
+    StockMovement,
     Product,
     Store,
     Supplier,
@@ -278,3 +284,123 @@ def replenishment_recommendations(
         "demand_window_days": demand_window_days,
         "safety_stock_days": safety_stock_days,
     }
+
+
+class InventoryAdjustment(BaseModel):
+    on_hand: int = Field(ge=0)
+    reserved: int = Field(ge=0)
+    reorder_point: int = Field(ge=0)
+    expected_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_reserved(self):
+        if self.reserved > self.on_hand:
+            raise ValueError("reserved cannot exceed on_hand")
+        if not self.reason.strip():
+            raise ValueError("reason cannot be empty")
+        return self
+
+
+@router.patch("/api/v1/inventory/{inventory_id}")
+def adjust_inventory(
+    inventory_id: int,
+    payload: InventoryAdjustment,
+    request: Request,
+    response: Response,
+    db: DbSession,
+    actor: Annotated[Actor, Depends(require_permission("inventory:write"))],
+):
+    supplied_id = request.headers.get("X-Request-ID", "").strip()
+    request_id = (
+        supplied_id
+        if supplied_id
+        and len(supplied_id) <= 100
+        and re.fullmatch(r"[A-Za-z0-9_.-]+", supplied_id)
+        else str(uuid4())
+    )
+    response.headers["X-Request-ID"] = request_id
+
+    try:
+        row = db.scalar(
+            select(Inventory)
+            .where(
+                Inventory.id == inventory_id,
+                Inventory.tenant_id == actor.tenant_id,
+            )
+            .with_for_update()
+        )
+
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Inventory record not found",
+            )
+
+        if row.version != payload.expected_version:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": "Inventory changed since it was loaded. Refresh and try again.",
+                    "current_version": row.version,
+                },
+            )
+
+        old_on_hand = row.on_hand
+        row.on_hand = payload.on_hand
+        row.reserved = payload.reserved
+        row.reorder_point = payload.reorder_point
+        row.version += 1
+
+        quantity_delta = payload.on_hand - old_on_hand
+        if quantity_delta != 0:
+            db.add(
+                StockMovement(
+                    tenant_id=actor.tenant_id,
+                    inventory_id=row.id,
+                    quantity_delta=quantity_delta,
+                    reason=payload.reason.strip(),
+                )
+            )
+
+        db.add(
+            AuditLog(
+                actor_id=actor.actor_id,
+                tenant_id=actor.tenant_id,
+                request_id=request_id,
+                action="inventory.adjust",
+                entity_type="inventory",
+                entity_id=str(row.id),
+                outcome="success",
+                details=json.dumps(
+                    {
+                        "old_on_hand": old_on_hand,
+                        "new_on_hand": row.on_hand,
+                        "reserved": row.reserved,
+                        "reorder_point": row.reorder_point,
+                        "quantity_delta": quantity_delta,
+                        "reason": payload.reason.strip(),
+                        "version": row.version,
+                    },
+                    sort_keys=True,
+                ),
+            )
+        )
+
+        db.commit()
+        db.refresh(row)
+
+        return {
+            "inventory_id": row.id,
+            "on_hand": row.on_hand,
+            "reserved": row.reserved,
+            "available_qty": row.available_qty,
+            "reorder_point": row.reorder_point,
+            "version": row.version,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise

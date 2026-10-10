@@ -146,7 +146,10 @@ def list_products(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
 ):
-    filters = [Product.tenant_id == actor.tenant_id]
+    filters = [
+    Product.tenant_id == actor.tenant_id,
+    Product.deleted_at.is_(None),
+    ]
 
     if q and q.strip():
         search_term = f"%{q.strip()}%"
@@ -412,3 +415,68 @@ def update_product(
     except Exception:
         db.rollback()
         raise
+
+@router.delete("/{sku}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_product(
+    sku: str,
+    request: Request,
+    response: Response,
+    db: DbSession,
+    actor: Annotated[
+        Actor, Depends(require_permission(WRITE_PERMISSION))
+    ],
+):
+    """Soft-delete a product while preserving historical records."""
+    request_id = request_id_for(request)
+    tenant_id = actor.tenant_id
+
+    try:
+        product = db.scalar(
+            select(Product).where(
+                Product.tenant_id == tenant_id,
+                Product.sku == sku,
+                Product.deleted_at.is_(None),
+            )
+        )
+
+        if product is None:
+            write_audit(
+                db,
+                actor=actor,
+                request_id=request_id,
+                action="product.delete",
+                outcome="denied",
+                entity_id=sku,
+                details={"reason": "not_found"},
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found",
+            )
+
+        product.deleted_at = func.now()
+
+        write_audit(
+            db,
+            actor=actor,
+            request_id=request_id,
+            action="product.delete",
+            outcome="success",
+            entity_id=sku,
+            details={"product_id": product.id},
+        )
+
+        db.commit()
+        response.headers["X-Request-ID"] = request_id
+
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        raise
+
+    return Response(
+        status_code=status.HTTP_204_NO_CONTENT,
+        headers={"X-Request-ID": request_id},
+    )
