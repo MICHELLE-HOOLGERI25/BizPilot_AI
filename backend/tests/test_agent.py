@@ -1,4 +1,48 @@
 from app.agent.graph import run_host_agent
+from app.agent.schemas import ConversationContext
+
+def test_revenue_follow_up_reuses_context_and_fetches_again():
+    calls = []
+
+    def revenue_provider(arguments):
+        calls.append(arguments)
+        return {
+            "current": {
+                "currency": "EUR",
+                "measure": "net_revenue",
+                "revenue": "900",
+                "source_timestamp": "2026-10-01T00:00:00Z",
+            },
+            "previous": {
+                "currency": "EUR",
+                "measure": "net_revenue",
+                "revenue": "1000",
+                "source_timestamp": "2026-09-01T00:00:00Z",
+            },
+            "product_contributions": [],
+        }
+
+    context = ConversationContext(
+        date_from="2026-09-01",
+        date_to="2026-09-30",
+        last_intent="revenue_investigation",
+    )
+
+    first = run_host_agent(
+        "Investigate revenue from 2026-09-01 to 2026-09-30",
+        revenue_provider=revenue_provider,
+        context=context,
+    )
+
+    second = run_host_agent(
+        "What caused the decline?",
+        revenue_provider=revenue_provider,
+        context=first.context,
+    )
+
+    assert len(calls) == 2
+    assert second.plan.intent == "revenue_investigation"
+
 
 
 def test_replenishment_without_provider_is_blocked():

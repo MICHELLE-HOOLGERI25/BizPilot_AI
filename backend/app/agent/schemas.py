@@ -3,8 +3,18 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class ConversationContext(BaseModel):
+    """Filters carried between related requests, not cached business results."""
+
+    region: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    last_intent: str | None = None
+
+
 class AgentRequest(BaseModel):
     request: str = Field(min_length=1, max_length=2000)
+    context: ConversationContext | None = None
 
 
 class PlanStep(BaseModel):
@@ -21,12 +31,18 @@ class PlanStep(BaseModel):
 class AgentPlan(BaseModel):
     intent: Literal[
         "replenishment_recommendations",
+        "revenue_investigation",
         "unsupported",
     ]
     max_days_of_cover: float = Field(default=7, gt=0, le=365)
     requires_write: bool = False
     explanation: str
     steps: list[PlanStep] = Field(default_factory=list)
+    date_from: str | None = None
+    date_to: str | None = None
+    comparison_from: str | None = None
+    comparison_to: str | None = None
+    region: str | None = None
 
 
 class EvidenceItem(BaseModel):
@@ -55,3 +71,5 @@ class AgentResult(BaseModel):
     recommendations: list[dict[str, Any]] = Field(default_factory=list)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     errors: list[AgentError] = Field(default_factory=list)
+    context: ConversationContext | None = None
+    revenue_comparison: dict[str, Any] | None = None

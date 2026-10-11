@@ -14,7 +14,6 @@ class PolicyResult:
 
 
 def evaluate_plan(plan: AgentPlan) -> PolicyResult:
-    """Fail-closed policy for the capabilities currently implemented."""
     if plan.intent == "unsupported":
         return PolicyResult(
             "block",
@@ -24,14 +23,16 @@ def evaluate_plan(plan: AgentPlan) -> PolicyResult:
     if plan.requires_write:
         return PolicyResult(
             "confirm",
-            "Write operations require explicit backend confirmation "
-            "and are not executed by this read-only workflow.",
+            "Write operations require explicit backend confirmation and are not executed by this read-only workflow.",
         )
 
-    if plan.intent == "replenishment_recommendations":
+    if plan.intent in {
+        "replenishment_recommendations",
+        "revenue_investigation",
+    }:
         return PolicyResult(
             "allow",
-            "Replenishment recommendations are read-only.",
+            "The requested investigation is read-only.",
         )
 
     return PolicyResult("block", "No policy permits this operation.")

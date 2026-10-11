@@ -14,7 +14,7 @@ from sqlalchemy import select
 from app.db.models import IdempotencyRecord
 
 from app.agent.graph import run_host_agent
-from app.agent.schemas import AgentRequest
+from app.agent.schemas import AgentRequest, ConversationContext
 from app.api.routes.inventory import (
     DbSession,
     InventoryReader,
@@ -145,6 +145,7 @@ def _validate_proposal_token(
         )
 
 
+
 @router.post("/run")
 def run_agent(
     payload: AgentRequest,
@@ -163,7 +164,10 @@ def run_agent(
     result = run_host_agent(
         payload.request,
         recommendations_provider=get_recommendations,
+        revenue_provider=None,
+        context=payload.context,
     )
+
     return result.model_dump()
 
 

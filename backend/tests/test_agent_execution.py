@@ -1,5 +1,5 @@
 from app.agent.executor import execute_read_only_plan
-from app.agent.schemas import AgentPlan
+from app.agent.schemas import AgentPlan, PlanStep
 
 
 def plan():
@@ -54,3 +54,56 @@ def test_provider_exception_fails_safely():
     result = execute_read_only_plan(plan(), fail)
 
     assert result.status == "failed"
+
+
+def test_missing_provider_marks_plan_steps_blocked():
+    execution_plan = AgentPlan(
+        intent="replenishment_recommendations",
+        explanation="read only",
+        steps=[
+            # Import PlanStep in the imports at the top of this file.
+            PlanStep(
+                step_id="read_recommendations",
+                description="Retrieve recommendations",
+            ),
+            PlanStep(
+                step_id="validate_response",
+                description="Validate response",
+            ),
+        ],
+    )
+
+    result = execute_read_only_plan(execution_plan, None)
+
+    assert result.status == "blocked"
+    assert result.verified is False
+    assert result.plan.steps[0].status == "blocked"
+    assert result.plan.steps[0].error_code == "PROVIDER_NOT_CONFIGURED"
+    assert result.plan.steps[1].status == "blocked"
+
+
+def test_failed_provider_marks_execution_steps_correctly():
+    execution_plan = AgentPlan(
+        intent="replenishment_recommendations",
+        explanation="read only",
+        steps=[
+            PlanStep(
+                step_id="read_recommendations",
+                description="Retrieve recommendations",
+            ),
+            PlanStep(
+                step_id="validate_response",
+                description="Validate response",
+            ),
+        ],
+    )
+
+    result = execute_read_only_plan(
+        execution_plan,
+        lambda days: {"total": 2, "data": []},
+    )
+
+    assert result.status == "failed"
+    assert result.verified is False
+    assert result.plan.steps[0].status == "failed"
+    assert result.plan.steps[1].status == "blocked"
