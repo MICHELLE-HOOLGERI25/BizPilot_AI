@@ -1,4 +1,4 @@
-
+from app.metadata import report_models  # noqa: F401
 from logging.config import fileConfig
 
 from alembic import context
