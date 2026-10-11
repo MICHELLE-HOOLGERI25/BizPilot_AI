@@ -8,6 +8,7 @@ from app.api.routes.purchase_orders import router as purchase_orders_router
 from app.api.routes.sales import router as sales_router
 from app.api.routes.suppliers import router as suppliers_router
 from app.api.routes.agent import router as agent_router
+from app.api.routes.metadata import router as metadata_router
 
 
 app = FastAPI(
@@ -45,6 +46,7 @@ app.include_router(purchase_orders_router)
 app.include_router(sales_router)
 app.include_router(suppliers_router)
 app.include_router(agent_router)
+app.include_router(metadata_router)
 
 
 @app.get("/health", tags=["health"])

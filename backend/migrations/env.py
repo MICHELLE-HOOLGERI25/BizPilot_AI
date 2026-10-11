@@ -8,7 +8,9 @@ from app.core.config import settings
 from app.db.session import Base
 
 # Import models here so Alembic can detect their tables.
+# Import models here so Alembic can detect their tables.
 from app.db import models  # noqa: F401
+from app.metadata import models as metadata_models  # noqa: F401
 
 config = context.config
 

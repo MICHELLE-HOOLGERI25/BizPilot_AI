@@ -16,3 +16,4 @@ class HostAgentState(TypedDict, total=False):
     policy_reason: str
     recommendations_provider: RecommendationsProvider
     result: AgentResult
+    metadata_matches: list[dict[str, Any]]

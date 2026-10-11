@@ -17,16 +17,17 @@ class PlanStep(BaseModel):
     safe_result_summary: str | None = None
     error_code: str | None = None
 
-
 class AgentPlan(BaseModel):
     intent: Literal[
         "replenishment_recommendations",
+        "metadata_discovery",
         "unsupported",
     ]
     max_days_of_cover: float = Field(default=7, gt=0, le=365)
     requires_write: bool = False
     explanation: str
     steps: list[PlanStep] = Field(default_factory=list)
+
 
 
 class EvidenceItem(BaseModel):
@@ -55,3 +56,4 @@ class AgentResult(BaseModel):
     recommendations: list[dict[str, Any]] = Field(default_factory=list)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     errors: list[AgentError] = Field(default_factory=list)
+    metadata_matches: list[dict[str, Any]] = Field(default_factory=list)

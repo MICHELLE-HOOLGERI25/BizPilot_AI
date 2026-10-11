@@ -89,22 +89,53 @@ def interpret_request(state: HostAgentState) -> dict:
                 ),
             ],
         )
-    else:
-        plan = AgentPlan(
-            intent="unsupported",
-            explanation=(
-                "This request is not supported by the current HostAgent."
-            ),
-        )
+        return {"plan": plan}
 
+    # Discover registered pages, widgets, filters, schemas,
+    # navigation entries, and capabilities.
+    provider = default_capability_provider()
+    matches = provider.discover(request, limit=10)
+
+    if matches:
+        plan = AgentPlan(
+            intent="metadata_discovery",
+            requires_write=False,
+            explanation=(
+                "Read-only metadata discovery. "
+                "No tools or business operations are executed."
+            ),
+            steps=[
+                PlanStep(
+                    step_id="discover_metadata",
+                    description="Find matching registered metadata",
+                )
+            ],
+        )
+        return {
+            "plan": plan,
+            "metadata_matches": matches,
+        }
+
+    plan = AgentPlan(
+        intent="unsupported",
+        explanation=(
+            "No matching registered capability was found."
+        ),
+    )
     return {"plan": plan}
 
 
 def apply_policy(state: HostAgentState) -> dict:
     plan = state["plan"]
 
-    # Route unsupported requests to an unsupported result, rather than
-    # incorrectly reporting them as policy-blocked.
+    # Metadata discovery only reads registered metadata.
+    if plan.intent == "metadata_discovery":
+        return {
+            "policy_decision": "discover",
+            "policy_reason": "Read-only metadata discovery.",
+        }
+
+    # Unsupported requests must not enter execution.
     if plan.intent == "unsupported":
         return {
             "policy_decision": "unsupported",
@@ -125,6 +156,24 @@ def execute_plan(state: HostAgentState) -> dict:
         "result": execute_read_only_plan(
             state["plan"],
             state.get("recommendations_provider"),
+        )
+    }
+
+
+def metadata_discovery_result(state: HostAgentState) -> dict:
+    matches = state.get("metadata_matches", [])
+
+    return {
+        "result": AgentResult(
+            status="completed",
+            message=f"Found {len(matches)} matching metadata entries.",
+            plan=state["plan"],
+            data_source="none",
+            actions_taken=[
+                "Interpreted request",
+                "Discovered metadata",
+            ],
+            metadata_matches=matches,
         )
     }
 
@@ -182,6 +231,9 @@ def route_after_policy(state: HostAgentState) -> str:
     if decision == "allow":
         return "execute"
 
+    if decision == "discover":
+        return "metadata_discovery"
+
     if decision == "unsupported":
         return "unsupported"
 
@@ -194,6 +246,7 @@ def build_host_agent():
     builder.add_node("interpret", interpret_request)
     builder.add_node("policy", apply_policy)
     builder.add_node("execute", execute_plan)
+    builder.add_node("metadata_discovery", metadata_discovery_result)
     builder.add_node("block", block_plan)
     builder.add_node("unsupported_plan", unsupported_plan)
     builder.add_node("verify", verify_result)
@@ -206,12 +259,14 @@ def build_host_agent():
         route_after_policy,
         {
             "execute": "execute",
+            "metadata_discovery": "metadata_discovery",
             "block": "block",
             "unsupported": "unsupported_plan",
         },
     )
 
     builder.add_edge("execute", "verify")
+    builder.add_edge("metadata_discovery", "verify")
     builder.add_edge("block", "verify")
     builder.add_edge("unsupported_plan", "verify")
     builder.add_edge("verify", END)
