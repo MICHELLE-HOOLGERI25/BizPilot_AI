@@ -39,7 +39,6 @@ export default function ProductsPage() {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
-  const [hiddenIds, setHiddenIds] = useState<string[]>([]);
 
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
@@ -65,12 +64,7 @@ export default function ProductsPage() {
     void loadProducts();
   }, []);
 
-  // Until the backend exposes an authorized DELETE endpoint, deletion is
-  // an explicitly local preview. Hidden IDs are not persisted on refresh.
-  const visibleProducts = useMemo(
-    () => products.filter((product) => !hiddenIds.includes(product.id)),
-    [products, hiddenIds]
-  );
+  const visibleProducts = products;
 
   const filteredProducts = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -177,13 +171,24 @@ export default function ProductsPage() {
     }
   }
 
-  function handleConfirmDelete() {
+  async function handleConfirmDelete() {
     if (!productToDelete || deleting) return;
-    setDeleting(true);
-    // Frontend demo only: do not imply that any backend record is deleted.
-    setHiddenIds((previous) => [...previous, productToDelete.id]);
-    setProductToDelete(null);
-    setDeleting(false);
+
+    const product = productToDelete;
+
+    try {
+      setDeleting(true);
+      setError("");
+      await productsApi.delete(product.id);
+      setProductToDelete(null);
+      await loadProducts();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Unable to delete the product."
+      );
+    } finally {
+      setDeleting(false);
+    }
   }
 
   const selectStyle =
@@ -205,7 +210,7 @@ export default function ProductsPage() {
       </div>
 
       <p className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
-        Demo mode: Delete only hides a product in this browser session. Refreshing the page restores it. No backend deletion occurs.
+        Deleted products are removed from the catalogue while historical records are retained.
       </p>
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -286,7 +291,7 @@ export default function ProductsPage() {
                           <XCircle size={17} />
                         </button>
                       )}
-                      <button type="button" aria-label={`Delete ${product.name}`} title="Delete (demo only)" onClick={() => setProductToDelete(product)} className="text-red-600 hover:text-red-800">
+                      <button type="button" aria-label={`Delete ${product.name}`} title="Delete product" onClick={() => setProductToDelete(product)} className="text-red-600 hover:text-red-800">
                         <Trash2 size={17} />
                       </button>
                     </div>
@@ -351,17 +356,17 @@ export default function ProductsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
           <div role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description" className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-50"><Trash2 size={24} className="text-red-600" /></div>
-            <h2 id="delete-title" className="text-xl font-bold">Remove product from demo view?</h2>
+            <h2 id="delete-title" className="text-xl font-bold">Delete product?</h2>
             <p id="delete-description" className="mt-3 text-sm text-slate-600">
               Hide <strong>{productToDelete.name}</strong> ({productToDelete.sku}) from this catalogue until you refresh the page?
             </p>
             <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-              This is a frontend-only demonstration. The backend record is not deleted. Final deletion will require server authorization, dependency checks and an audit trail.
+              This product will be soft-deleted. Historical records will be retained.
             </p>
             <div className="mt-6 flex justify-end gap-3">
               <button type="button" disabled={deleting} onClick={() => setProductToDelete(null)} className="rounded-lg border border-slate-200 px-5 py-2.5 text-sm">Cancel</button>
               <button type="button" disabled={deleting} onClick={handleConfirmDelete} className="rounded-lg bg-red-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">
-                {deleting ? "Removing..." : "Remove from View"}
+                {deleting ? "Deleting..." : "Delete Product"}
               </button>
             </div>
           </div>
