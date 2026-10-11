@@ -1,15 +1,14 @@
+
 from __future__ import annotations
 
 import re
 
 from langgraph.graph import END, START, StateGraph
 
-from app.agent.capability_provider import (
-    default_capability_provider,
-)
+from app.agent.capability_provider import default_capability_provider
 from app.agent.executor import execute_read_only_plan
 from app.agent.policies import evaluate_plan
-from app.agent.schemas import AgentPlan, AgentResult, PlanStep
+from app.agent.schemas import AgentError, AgentPlan, AgentResult, PlanStep
 from app.agent.state import HostAgentState, RecommendationsProvider
 
 
@@ -17,7 +16,8 @@ def interpret_request(state: HostAgentState) -> dict:
     request = state["request"].strip()
     normalized = request.lower()
 
-    # Fail safely: write requests must never enter the read-only workflow.
+    # Fail safely: purchase-order write requests never enter the
+    # read-only replenishment execution path.
     write_action = re.search(
         r"\b(create|draft|generate|place|submit|approve|cancel|"
         r"delete|update|edit|modify)\b",
@@ -34,8 +34,8 @@ def interpret_request(state: HostAgentState) -> dict:
             requires_write=True,
             explanation=(
                 "This request appears to modify a purchase order. "
-                "The current workflow is read-only, so no write operation "
-                "will be executed."
+                "The current workflow is read-only, so no write "
+                "operation will be executed."
             ),
         )
         return {"plan": plan}
@@ -76,12 +76,16 @@ def interpret_request(state: HostAgentState) -> dict:
             steps=[
                 PlanStep(
                     step_id="read_recommendations",
-                    description="Retrieve live replenishment recommendations",
+                    description=(
+                        "Retrieve live replenishment recommendations"
+                    ),
                     tool_id=capability.tool_id if capability else None,
                 ),
                 PlanStep(
                     step_id="validate_response",
-                    description="Validate the operational response contract",
+                    description=(
+                        "Validate the operational response contract"
+                    ),
                 ),
             ],
         )
@@ -97,16 +101,21 @@ def interpret_request(state: HostAgentState) -> dict:
 
 
 def apply_policy(state: HostAgentState) -> dict:
-    decision = evaluate_plan(state["plan"])
+    plan = state["plan"]
 
-    # Unsupported requests continue to the executor so that they
-    # return the explicit "unsupported" status.
+    # Route unsupported requests to an unsupported result, rather than
+    # incorrectly reporting them as policy-blocked.
+    if plan.intent == "unsupported":
+        return {
+            "policy_decision": "unsupported",
+            "policy_reason": (
+                "The requested capability is not registered."
+            ),
+        }
+
+    decision = evaluate_plan(plan)
     return {
-        "policy_decision": (
-            "allow"
-            if state["plan"].intent == "unsupported"
-            else decision.decision
-        ),
+        "policy_decision": decision.decision,
         "policy_reason": decision.reason,
     }
 
@@ -121,8 +130,6 @@ def execute_plan(state: HostAgentState) -> dict:
 
 
 def block_plan(state: HostAgentState) -> dict:
-    from app.agent.schemas import AgentError
-
     return {
         "result": AgentResult(
             status="blocked",
@@ -131,6 +138,10 @@ def block_plan(state: HostAgentState) -> dict:
                 "Policy blocked this operation.",
             ),
             plan=state["plan"],
+            actions_taken=[
+                "Interpreted request",
+                "Applied read-only policy",
+            ],
             errors=[
                 AgentError(
                     code="POLICY_BLOCKED",
@@ -144,13 +155,37 @@ def block_plan(state: HostAgentState) -> dict:
     }
 
 
+def unsupported_plan(state: HostAgentState) -> dict:
+    return {
+        "result": AgentResult(
+            status="unsupported",
+            message=(
+                "The current HostAgent does not support this request."
+            ),
+            plan=state["plan"],
+        )
+    }
+
+
 def verify_result(state: HostAgentState) -> dict:
     result = state["result"]
 
-    # Response validation is not independent persisted-state verification.
+    # This workflow does not independently verify persisted state.
     result.verified = False
 
     return {"result": result}
+
+
+def route_after_policy(state: HostAgentState) -> str:
+    decision = state["policy_decision"]
+
+    if decision == "allow":
+        return "execute"
+
+    if decision == "unsupported":
+        return "unsupported"
+
+    return "block"
 
 
 def build_host_agent():
@@ -160,6 +195,7 @@ def build_host_agent():
     builder.add_node("policy", apply_policy)
     builder.add_node("execute", execute_plan)
     builder.add_node("block", block_plan)
+    builder.add_node("unsupported_plan", unsupported_plan)
     builder.add_node("verify", verify_result)
 
     builder.add_edge(START, "interpret")
@@ -167,19 +203,17 @@ def build_host_agent():
 
     builder.add_conditional_edges(
         "policy",
-        lambda state: (
-            "execute"
-            if state["policy_decision"] == "allow"
-            else "block"
-        ),
+        route_after_policy,
         {
             "execute": "execute",
             "block": "block",
+            "unsupported": "unsupported_plan",
         },
     )
 
     builder.add_edge("execute", "verify")
     builder.add_edge("block", "verify")
+    builder.add_edge("unsupported_plan", "verify")
     builder.add_edge("verify", END)
 
     return builder.compile()

@@ -1,6 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete
+import app.api.routes.agent as agent_routes
+from sqlalchemy import select
+from app.db.models import IdempotencyRecord
 
 from app.api.routes.purchase_orders import get_db
 from app.db.models import (
@@ -449,3 +452,174 @@ def test_submit_draft_purchase_order_and_audit(client):
             )
         )
         assert audit is not None
+
+def _get_agent_proposal(client):
+    response = client.post(
+        "/api/v1/agent/propose-purchase-orders?max_days_of_cover=7"
+    )
+    assert response.status_code == 200, response.text
+
+    body = response.json()
+    assert body["status"] == "proposed"
+    assert body["creates_purchase_orders"] is False
+    assert body["proposal_count"] > 0
+
+    return body["proposals"][0]
+
+
+def _agent_confirmation_body(proposal):
+    return {
+        "confirmed": True,
+        "proposal_token": proposal["proposal_token"],
+        "purchase_order": proposal["purchase_order"],
+    }
+
+
+def test_agent_proposal_does_not_create_purchase_order(client):
+    with SessionLocal() as db:
+        before = set(db.scalars(select(PurchaseOrder.id)).all())
+
+    _get_agent_proposal(client)
+
+    with SessionLocal() as db:
+        after = set(db.scalars(select(PurchaseOrder.id)).all())
+
+    assert after == before
+
+
+def test_agent_confirmation_rejects_tampered_payload(client):
+    proposal = _get_agent_proposal(client)
+    body = _agent_confirmation_body(proposal)
+    body["purchase_order"]["items"][0]["quantity"] += 1
+
+    response = client.post(
+        "/api/v1/agent/confirm-purchase-order",
+        json=body,
+        headers={"Idempotency-Key": "agent-tamper-test-001"},
+    )
+
+    assert response.status_code == 403, response.text
+
+
+def test_agent_confirmation_rejects_wrong_actor(client):
+    proposal = _get_agent_proposal(client)
+
+    response = client.post(
+        "/api/v1/agent/confirm-purchase-order",
+        json=_agent_confirmation_body(proposal),
+        headers={
+            "Idempotency-Key": "agent-wrong-actor-001",
+            "X-Demo-Actor-Id": "different-user",
+        },
+    )
+
+    assert response.status_code == 403, response.text
+
+
+def test_agent_confirmation_rejects_wrong_tenant(client):
+    proposal = _get_agent_proposal(client)
+
+    response = client.post(
+        "/api/v1/agent/confirm-purchase-order",
+        json=_agent_confirmation_body(proposal),
+        headers={"Idempotency-Key": "agent-wrong-tenant-001",
+                 "X-Demo-Tenant-Id": "different-tenant"},
+    )
+
+    assert response.status_code == 403, response.text
+
+
+def test_agent_confirmation_rejects_expired_proposal(client, monkeypatch):
+    proposal = _get_agent_proposal(client)
+    body = _agent_confirmation_body(proposal)
+
+    real_time = agent_routes.time.time
+    monkeypatch.setattr(
+        agent_routes.time,
+        "time",
+        lambda: real_time()
+        + agent_routes.settings.confirmation_ttl_seconds
+        + 1,
+    )
+
+    response = client.post(
+        "/api/v1/agent/confirm-purchase-order",
+        json=body,
+        headers={"Idempotency-Key": "agent-expired-test-001"},
+    )
+
+    assert response.status_code == 403, response.text
+    assert "expired" in response.json()["detail"].lower()
+
+
+def test_agent_confirmation_requires_explicit_confirmation(client):
+    proposal = _get_agent_proposal(client)
+    body = _agent_confirmation_body(proposal)
+    body["confirmed"] = False
+
+    response = client.post(
+        "/api/v1/agent/confirm-purchase-order",
+        json=body,
+        headers={"Idempotency-Key": "agent-cancel-test-001"},
+    )
+
+    assert response.status_code == 400, response.text
+
+
+def test_agent_confirmation_idempotency_returns_same_order(client):
+    proposal = _get_agent_proposal(client)
+    body = _agent_confirmation_body(proposal)
+    headers = {"Idempotency-Key": "agent-idempotent-test-001"}
+
+    first = client.post(
+        "/api/v1/agent/confirm-purchase-order",
+        json=body,
+        headers=headers,
+    )
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert first_body["status"] == "draft"
+
+    # Count confirmation records after the first successful creation.
+    with SessionLocal() as db:
+        count_before = len(
+            db.scalars(
+                select(ActionConfirmation.id).where(
+                    ActionConfirmation.actor_id == "pytest-user",
+                    ActionConfirmation.tenant_id == "demo",
+                )
+            ).all()
+        )
+
+        order_ids_before = set(
+            db.scalars(select(PurchaseOrder.id)).all()
+        )
+
+    second = client.post(
+        "/api/v1/agent/confirm-purchase-order",
+        json=body,
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+
+    assert second_body["id"] == first_body["id"]
+    assert second_body["order_number"] == first_body["order_number"]
+
+    # A replay must not create another confirmation or purchase order.
+    with SessionLocal() as db:
+        count_after = len(
+            db.scalars(
+                select(ActionConfirmation.id).where(
+                    ActionConfirmation.actor_id == "pytest-user",
+                    ActionConfirmation.tenant_id == "demo",
+                )
+            ).all()
+        )
+
+        order_ids_after = set(
+            db.scalars(select(PurchaseOrder.id)).all()
+        )
+
+    assert count_after == count_before
+    assert order_ids_after == order_ids_before
