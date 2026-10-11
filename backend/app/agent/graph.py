@@ -17,16 +17,38 @@ def interpret_request(state: HostAgentState) -> dict:
     request = state["request"].strip()
     normalized = request.lower()
 
+    # Fail safely: write requests must never enter the read-only workflow.
+    write_action = re.search(
+        r"\b(create|draft|generate|place|submit|approve|cancel|"
+        r"delete|update|edit|modify)\b",
+        normalized,
+    )
+    order_reference = re.search(
+        r"\b(purchase[\s-]*orders?|pos?)\b",
+        normalized,
+    )
+
+    if write_action and order_reference:
+        plan = AgentPlan(
+            intent="unsupported",
+            requires_write=True,
+            explanation=(
+                "This request appears to modify a purchase order. "
+                "The current workflow is read-only, so no write operation "
+                "will be executed."
+            ),
+        )
+        return {"plan": plan}
+
     days = 7.0
     match = re.search(
         r"(?:within|in|next|over)\s+(\d+(?:\.\d+)?)\s+days?",
         normalized,
     )
-
     if match:
         days = min(365.0, max(0.1, float(match.group(1))))
 
-    terms = (
+    replenishment_terms = (
         "replenishment",
         "days of cover",
         "run out",
@@ -34,13 +56,11 @@ def interpret_request(state: HostAgentState) -> dict:
         "stockout",
         "stock out",
         "low stock",
-        "purchase order",
-        "purchase orders",
         "out of stock",
         "reorder",
     )
 
-    if any(term in normalized for term in terms):
+    if any(term in normalized for term in replenishment_terms):
         capability = default_capability_provider().get(
             "person2.replenishment_recommendations"
         )
@@ -51,28 +71,20 @@ def interpret_request(state: HostAgentState) -> dict:
             requires_write=False,
             explanation=(
                 "Read-only replenishment lookup. "
-                "This request will not create, approve, "
-                "or submit a purchase order."
+                "No purchase order will be created or submitted."
             ),
             steps=[
                 PlanStep(
                     step_id="read_recommendations",
-                    description=(
-                        "Retrieve live replenishment recommendations"
-                    ),
-                    tool_id=(
-                        capability.tool_id if capability else None
-                    ),
+                    description="Retrieve live replenishment recommendations",
+                    tool_id=capability.tool_id if capability else None,
                 ),
                 PlanStep(
                     step_id="validate_response",
-                    description=(
-                        "Validate the operational response contract"
-                    ),
+                    description="Validate the operational response contract",
                 ),
             ],
         )
-
     else:
         plan = AgentPlan(
             intent="unsupported",
