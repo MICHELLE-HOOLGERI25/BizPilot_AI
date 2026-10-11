@@ -7,6 +7,8 @@ from app.api.routes.products import router as products_router
 from app.api.routes.purchase_orders import router as purchase_orders_router
 from app.api.routes.sales import router as sales_router
 from app.api.routes.suppliers import router as suppliers_router
+from app.api.routes.agent import router as agent_router
+
 
 app = FastAPI(
     title="BizPilot AI API",
@@ -42,6 +44,7 @@ app.include_router(inventory_router)
 app.include_router(purchase_orders_router)
 app.include_router(sales_router)
 app.include_router(suppliers_router)
+app.include_router(agent_router)
 
 
 @app.get("/health", tags=["health"])
